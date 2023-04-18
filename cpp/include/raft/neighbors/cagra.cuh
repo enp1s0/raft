@@ -107,11 +107,12 @@ template <class DATA_T,
           typename g_accessor =
             host_device_accessor<std::experimental::default_accessor<DATA_T>, memory_type::host>>
 void prune(raft::device_resources const& res,
-           mdspan<const DATA_T, matrix_extent<IdxT>, row_major, d_accessor> dataset,
            mdspan<IdxT, matrix_extent<IdxT>, row_major, g_accessor> knn_graph,
-           raft::host_matrix_view<IdxT, IdxT, row_major> new_graph)
+           raft::host_matrix_view<IdxT, IdxT, row_major> new_graph,
+           std::optional<mdspan<const DATA_T, matrix_extent<IdxT>, row_major, d_accessor>> dataset_opt = std::nullopt
+           )
 {
-  detail::graph::prune(res, dataset, knn_graph, new_graph);
+  detail::graph::prune(res, knn_graph, new_graph, dataset_opt);
 }
 
 /**
@@ -178,7 +179,7 @@ index<T, IdxT> build(raft::device_resources const& res,
 
   auto cagra_graph = raft::make_host_matrix<IdxT, IdxT>(dataset.extent(0), params.graph_degree);
 
-  prune<T, IdxT>(res, dataset, knn_graph.view(), cagra_graph.view());
+  prune<T, IdxT>(res, knn_graph.view(), cagra_graph.view());
 
   // Construct an index from dataset and pruned knn graph.
   return index<T, IdxT>(res, params.metric, dataset, cagra_graph.view());
