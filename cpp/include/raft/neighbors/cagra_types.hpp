@@ -69,7 +69,7 @@ enum class search_algo {
   AUTO
 };
 
-enum class hash_mode { HASH, SMALL, AUTO };
+enum class hash_mode { STANDARD, FORGETTABLE, AUTO };
 
 struct search_params : ann::search_params {
   /** Maximum number of queries to search at the same time (batch size). Auto select when 0.*/

@@ -18,6 +18,7 @@
 
 #include "hashmap.hpp"
 #include <raft/core/resource/cuda_stream.hpp>
+#include <raft/neighbors/sample_filter_types.hpp>
 // #include "search_single_cta.cuh"
 // #include "topk_for_cagra/topk_core.cuh"
 
@@ -166,7 +167,7 @@ struct search_plan_impl : public search_plan_impl_base {
     small_hash_bitlen         = 0;
     small_hash_reset_interval = 1024 * 1024;
     float max_fill_rate       = hashmap_max_fill_rate;
-    while (hashmap_mode == hash_mode::AUTO || hashmap_mode == hash_mode::SMALL) {
+    while (hashmap_mode == hash_mode::AUTO || hashmap_mode == hash_mode::FORGETTABLE) {
       //
       // The small-hash reduces hash table size by initializing the hash table
       // for each iteraton and re-registering only the nodes that should not be
@@ -291,11 +292,19 @@ struct search_plan_impl : public search_plan_impl_base {
         "`hashmap_max_fill_rate` must be equal to or greater than 0.1 and smaller than 0.9. " +
         std::to_string(hashmap_max_fill_rate) + " has been given.";
     }
-    if (algo == search_algo::MULTI_CTA) {
-      if (hashmap_mode == hash_mode::SMALL) {
-        error_message += "`small_hash` is not available when 'search_mode' is \"multi-cta\"";
+    if (!std::is_same<SAMPLE_FILTER_T,
+                      raft::neighbors::filtering::none_cagra_sample_filter>::value) {
+      if (hashmap_mode == hash_mode::FORGETTABLE) {
+        error_message += "`FORGETTABLE` hash is not available when filtering";
       } else {
-        hashmap_mode = hash_mode::HASH;
+        hashmap_mode = hash_mode::STANDARD;
+      }
+    }
+    if (algo == search_algo::MULTI_CTA) {
+      if (hashmap_mode == hash_mode::FORGETTABLE) {
+        error_message += "`FORGETTABLE` hash is not available when 'search_mode' is \"multi-cta\"";
+      } else {
+        hashmap_mode = hash_mode::STANDARD;
       }
     }
 
