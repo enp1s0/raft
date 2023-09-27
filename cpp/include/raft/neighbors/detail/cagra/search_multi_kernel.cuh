@@ -788,12 +788,16 @@ struct search : search_plan_impl<DATA_T, INDEX_T, DISTANCE_T, SAMPLE_FILTER_T> {
     auto result_indices_ptr   = result_indices.data() + (iter & 0x1) * result_buffer_size;
     auto result_distances_ptr = result_distances.data() + (iter & 0x1) * result_buffer_size;
 
-    // Remove parent bit in search results
-    remove_parent_bit(
-      num_queries, itopk_size, result_indices_ptr, result_buffer_allocation_size, stream);
-
     if (!std::is_same<SAMPLE_FILTER_T,
                       raft::neighbors::filtering::none_cagra_sample_filter>::value) {
+      // Remove parent bit in search results
+      remove_parent_bit(+num_queries,
+                        result_buffer_size,
+                        result_indices.data() + (iter & 0x1) * itopk_size,
+                        result_buffer_allocation_size,
+                        stream);
+
+      // Filter
       apply_filter<INDEX_T, DISTANCE_T, SAMPLE_FILTER_T>(
         result_indices.data() + (iter & 0x1) * itopk_size,
         result_distances.data() + (iter & 0x1) * itopk_size,
@@ -821,6 +825,10 @@ struct search : search_plan_impl<DATA_T, INDEX_T, DISTANCE_T, SAMPLE_FILTER_T> {
                        true,
                        topk_hint.data(),
                        stream);
+    } else {
+      // Remove parent bit in search results
+      remove_parent_bit(
+        num_queries, itopk_size, result_indices_ptr, result_buffer_allocation_size, stream);
     }
 
     // Copy results from working buffer to final buffer
