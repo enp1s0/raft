@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include <raft/core/bitset.cuh>
 #include <raft/core/detail/macros.hpp>
 
 namespace raft::neighbors::filtering {
@@ -46,6 +47,47 @@ struct none_cagra_sample_filter {
     const uint32_t sample_ix) const
   {
     return true;
+  }
+};
+
+/**
+ * @brief Filter a CAGRA index with a bitset
+ *
+ * @tparam index_t Indexing type
+ */
+template <typename index_t>
+struct removed_cagra_filter {
+  // Pointers to the inverted lists (clusters) indices  [n_lists]
+  const raft::core::bitset<std::uint32_t, index_t> removed_bitset_;
+
+  struct filter_core_t {
+    const raft::core::bitset_view<const std::uint32_t, index_t> removed_bitset_view_;
+    filter_core_t(const raft::core::bitset_view<const std::uint32_t, index_t> removed_bitset)
+      : removed_bitset_view_{removed_bitset}
+    {
+    }
+    inline _RAFT_HOST_DEVICE bool operator()(
+      // query index
+      const uint32_t query_ix,
+      // the index of the current sample
+      const uint32_t sample_ix) const
+    {
+      return removed_bitset_view_.test(sample_ix);
+    }
+  };
+  filter_core_t filter;
+
+  removed_cagra_filter(const raft::core::bitset_view<const std::uint32_t, index_t> removed_bitset)
+    : removed_bitset_(removed_bitset), filter(removed_bitset_.view())
+  {
+  }
+
+  removed_cagra_filter(const raft::resources& res,
+                       raft::device_vector_view<const index_t, index_t> mask_index)
+    : removed_bitset_(
+        raft::core::bitset<std::uint32_t, index_t>(res, mask_index, mask_index.size())),
+      filter(removed_bitset_.view())
+  {
   }
 };
 
