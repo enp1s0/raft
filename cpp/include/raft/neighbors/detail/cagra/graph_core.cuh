@@ -451,6 +451,12 @@ void optimize(raft::resources const& res,
       (double)num_full / graph_size * 100);
   }
 
+  auto pruned_graph = raft::make_host_matrix<IdxT, int64_t>(graph_size, output_graph_degree);
+  raft::copy(pruned_graph.data_handle(),
+             output_graph_ptr,
+             graph_size * output_graph_degree,
+             resource::get_cuda_stream(res));
+
   auto rev_graph       = raft::make_host_matrix<IdxT, int64_t>(graph_size, output_graph_degree);
   auto rev_graph_count = raft::make_host_vector<uint32_t, int64_t>(graph_size);
 
@@ -522,27 +528,47 @@ void optimize(raft::resources const& res,
     //
     const double time_replace_start = cur_time();
 
-    const uint64_t num_protected_edges = output_graph_degree / 2;
-    RAFT_LOG_DEBUG("# num_protected_edges: %lu", num_protected_edges);
-
     constexpr int _omp_chunk = 1024;
 #pragma omp parallel for schedule(dynamic, _omp_chunk)
     for (uint64_t j = 0; j < graph_size; j++) {
-      uint64_t k = std::min(rev_graph_count.data_handle()[j], output_graph_degree);
-      while (k) {
-        k--;
-        uint64_t i = rev_graph.data_handle()[k + (output_graph_degree * j)];
-
-        uint64_t pos =
-          pos_in_array<IdxT>(i, output_graph_ptr + (output_graph_degree * j), output_graph_degree);
-        if (pos < num_protected_edges) { continue; }
-        uint64_t num_shift = pos - num_protected_edges;
-        if (pos == output_graph_degree) {
-          num_shift = output_graph_degree - num_protected_edges - 1;
+      uint32_t* my_output_graph       = output_graph_ptr + (output_graph_degree * j);
+      const uint32_t* my_input_graph1 = pruned_graph.data_handle() + (output_graph_degree * j);
+      const uint32_t* my_input_graph2 = rev_graph.data_handle() + (output_graph_degree * j);
+      uint32_t k                      = 0;
+      uint32_t k1                     = 0;
+      uint32_t k2                     = 0;
+      uint32_t my_replaced_edges      = 0;
+      while (k1 < output_graph_degree / 2) {
+        my_output_graph[k++] = my_input_graph1[k1++];
+      }
+      const uint32_t k_p1 = k;
+      while (k2 < rev_graph_count.data_handle()[j]) {
+        const uint32_t nid = my_input_graph2[k2++];
+        bool match         = false;
+        for (uint32_t kk = 0; kk < k_p1; kk++) {
+          if (my_output_graph[kk] != nid) continue;
+          match = true;
+          break;
         }
-        shift_array<IdxT>(output_graph_ptr + num_protected_edges + (output_graph_degree * j),
-                          num_shift);
-        output_graph_ptr[num_protected_edges + (output_graph_degree * j)] = i;
+        if (!match) {
+          my_replaced_edges += 1;
+          my_output_graph[k++] = nid;
+          if (k >= output_graph_degree) break;
+        }
+      }
+      const uint32_t k_p2 = k;
+      while (k1 < output_graph_degree) {
+        const uint32_t nid = my_input_graph1[k1++];
+        bool match         = false;
+        for (uint32_t kk = k_p1; kk < k_p2; kk++) {
+          if (my_output_graph[kk] != nid) continue;
+          match = true;
+          my_replaced_edges -= 1;
+          break;
+        }
+        if (!match) {
+          if (k < output_graph_degree) { my_output_graph[k++] = nid; }
+        }
       }
       if ((omp_get_thread_num() == 0) && ((j % _omp_chunk) == 0)) {
         RAFT_LOG_DEBUG("# Replacing reverse edges: %lu / %lu    ", j, graph_size);
