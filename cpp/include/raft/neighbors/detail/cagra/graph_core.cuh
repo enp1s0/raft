@@ -531,13 +531,13 @@ void optimize(raft::resources const& res,
     constexpr int _omp_chunk = 1024;
 #pragma omp parallel for schedule(dynamic, _omp_chunk)
     for (uint64_t j = 0; j < graph_size; j++) {
-      uint32_t* my_output_graph       = output_graph_ptr + (output_graph_degree * j);
-      const uint32_t* my_input_graph1 = pruned_graph.data_handle() + (output_graph_degree * j);
-      const uint32_t* my_input_graph2 = rev_graph.data_handle() + (output_graph_degree * j);
-      uint32_t k                      = 0;
-      uint32_t k1                     = 0;
-      uint32_t k2                     = 0;
-      uint32_t my_replaced_edges      = 0;
+      auto my_output_graph       = output_graph_ptr + (output_graph_degree * j);
+      const auto my_input_graph1 = pruned_graph.data_handle() + (output_graph_degree * j);
+      const auto my_input_graph2 = rev_graph.data_handle() + (output_graph_degree * j);
+      uint32_t k                 = 0;
+      uint32_t k1                = 0;
+      uint32_t k2                = 0;
+      uint32_t my_replaced_edges = 0;
       while (k1 < output_graph_degree / 2) {
         my_output_graph[k++] = my_input_graph1[k1++];
       }
