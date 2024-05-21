@@ -38,6 +38,40 @@
 #include <type_traits>
 
 namespace raft::neighbors::cagra {
+namespace detail {
+struct free_host_mem {
+  void operator()(void* ptr) { RAFT_CUDA_TRY(cudaFreeHost(ptr)); }
+};
+}  // namespace detail
+template <class T, class IndexT>
+struct graph_mem_t {
+  IndexT size_, degree_;
+  std::unique_ptr<T, detail::free_host_mem> uptr;
+
+  graph_mem_t(const std::size_t size, const std::size_t degree) : size_(size), degree_(degree)
+  {
+    if (size * degree != 0) {
+      std::printf("[CAGRA Log (by enp1s0)]: Allocate host pinned memory for CAGRA graph (%lu B)\n",
+                  sizeof(T) * size_ * degree_);
+    }
+    T* ptr;
+    RAFT_CUDA_TRY(cudaMallocHost(&ptr, sizeof(T) * size_ * degree_));
+
+    uptr = std::unique_ptr<T, detail::free_host_mem>{ptr};
+  }
+
+  IndexT extent(const std::uint32_t i)
+  {
+    if (i == 0) { return size_; }
+    return degree_;
+  }
+
+  IndexT size() { return size_ * degree_; }
+
+  T* data_handle() const { return uptr.get(); }
+
+  auto view() { return raft::make_device_matrix_view(data_handle(), size_, degree_); }
+};
 /**
  * @addtogroup cagra
  * @{
@@ -205,7 +239,7 @@ struct index : ann::index {
         raft::distance::DistanceType metric = raft::distance::DistanceType::L2Expanded)
     : ann::index(),
       metric_(metric),
-      graph_(make_device_matrix<IdxT, int64_t>(res, 0, 0)),
+      graph_(0, 0),
       dataset_(new neighbors::empty_dataset<int64_t>(0))
   {
   }
@@ -269,10 +303,7 @@ struct index : ann::index {
         raft::distance::DistanceType metric,
         mdspan<const T, matrix_extent<int64_t>, row_major, data_accessor> dataset,
         mdspan<const IdxT, matrix_extent<int64_t>, row_major, graph_accessor> knn_graph)
-    : ann::index(),
-      metric_(metric),
-      graph_(make_device_matrix<IdxT, int64_t>(res, 0, 0)),
-      dataset_(make_aligned_dataset(res, dataset, 16))
+    : ann::index(), metric_(metric), graph_(0, 0), dataset_(make_aligned_dataset(res, dataset, 16))
   {
     RAFT_EXPECTS(dataset.extent(0) == knn_graph.extent(0),
                  "Dataset and knn_graph must have equal number of rows");
@@ -349,8 +380,8 @@ struct index : ann::index {
     RAFT_LOG_DEBUG("Copying CAGRA knn graph from host to device");
     if ((graph_.extent(0) != knn_graph.extent(0)) || (graph_.extent(1) != knn_graph.extent(1))) {
       // clear existing memory before allocating to prevent OOM errors on large graphs
-      if (graph_.size()) { graph_ = make_device_matrix<IdxT, int64_t>(res, 0, 0); }
-      graph_ = make_device_matrix<IdxT, int64_t>(res, knn_graph.extent(0), knn_graph.extent(1));
+      if (graph_.size()) { graph_ = graph_mem_t<IdxT, std::int64_t>(0, 0); }
+      graph_ = graph_mem_t<IdxT, int64_t>(knn_graph.extent(0), knn_graph.extent(1));
     }
     raft::copy(graph_.data_handle(),
                knn_graph.data_handle(),
@@ -361,7 +392,7 @@ struct index : ann::index {
 
  private:
   raft::distance::DistanceType metric_;
-  raft::device_matrix<IdxT, int64_t, row_major> graph_;
+  graph_mem_t<IdxT, int64_t> graph_;
   raft::device_matrix_view<const IdxT, int64_t, row_major> graph_view_;
   std::unique_ptr<neighbors::dataset<int64_t>> dataset_;
 };
