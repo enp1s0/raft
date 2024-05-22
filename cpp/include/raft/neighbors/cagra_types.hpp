@@ -32,6 +32,8 @@
 
 #include <thrust/fill.h>
 
+#include <sys/mman.h>
+
 #include <memory>
 #include <optional>
 #include <string>
@@ -39,25 +41,80 @@
 
 namespace raft::neighbors::cagra {
 namespace detail {
+enum class host_malloc_mode_t { huge_page, cuda_malloc_host, cuda_malloc_device };
+
+inline host_malloc_mode_t get_host_alloc_mode()
+{
+  const auto env = getenv("CAGRA_GRAPH_HOST_MALLOC_MODE");
+  if (env != nullptr) {
+    const std::string flag(env);
+    if (flag == "HUGE_PAGE_HOST") {
+      return host_malloc_mode_t::huge_page;
+    } else if (flag == "DEVICE") {
+      return host_malloc_mode_t::cuda_malloc_device;
+    } else if (flag == "PINNED_HOST") {
+      return host_malloc_mode_t::cuda_malloc_device;
+    } else {
+      throw std::runtime_error(
+        "CAGRA_GRAPH_HOST_MALLOC_MODE must be HUGE_PAGE_HOST, PINNED_HOST, or DEVICE");
+    }
+  }
+  //
+  return host_malloc_mode_t::cuda_malloc_host;
+}
+
 struct free_host_mem {
-  void operator()(void* ptr) { RAFT_CUDA_TRY(cudaFreeHost(ptr)); }
+  std::size_t allocate_size;
+  host_malloc_mode_t malloc_mode;
+
+  void operator()(void* ptr)
+  {
+    if (malloc_mode == detail::host_malloc_mode_t::cuda_malloc_host) {
+      RAFT_CUDA_TRY_NO_THROW(cudaFreeHost(ptr));
+    } else if (malloc_mode == detail::host_malloc_mode_t::cuda_malloc_device) {
+      RAFT_CUDA_TRY_NO_THROW(cudaFree(ptr));
+    } else {
+      if (ptr != nullptr) { assert(munmap(ptr, allocate_size) == 0); }
+    }
+  }
 };
 }  // namespace detail
 template <class T, class IndexT>
 struct graph_mem_t {
   IndexT size_, degree_;
-  std::unique_ptr<T, detail::free_host_mem> uptr;
+  using uptr_t = std::unique_ptr<T, detail::free_host_mem>;
+  uptr_t uptr;
 
-  graph_mem_t(const std::size_t size, const std::size_t degree) : size_(size), degree_(degree)
+  graph_mem_t(const std::size_t size_, const std::size_t degree_) : size_(size_), degree_(degree_)
   {
-    if (size * degree != 0) {
-      std::printf("[CAGRA Log (by enp1s0)]: Allocate host pinned memory for CAGRA graph (%lu B)\n",
-                  sizeof(T) * size_ * degree_);
+    const auto malloc_mode   = detail::get_host_alloc_mode();
+    const auto allocate_size = sizeof(T) * size();
+    std::string mem_type_str;
+    if (malloc_mode == detail::host_malloc_mode_t::cuda_malloc_host) {
+      mem_type_str = "pinned host memory";
+    } else if (malloc_mode == detail::host_malloc_mode_t::cuda_malloc_device) {
+      mem_type_str = "device memory";
+    } else {
+      mem_type_str = "huge page host memory";
     }
-    T* ptr;
-    RAFT_CUDA_TRY(cudaMallocHost(&ptr, sizeof(T) * size_ * degree_));
+    std::printf("[CAGRA Log (by enp1s0)]: Allocate %s for CAGRA graph (%lu B)\n",
+                mem_type_str.c_str(),
+                allocate_size);
+    std::fflush(stdout);
 
-    uptr = std::unique_ptr<T, detail::free_host_mem>{ptr};
+    T* ptr;
+    if (malloc_mode == detail::host_malloc_mode_t::cuda_malloc_host) {
+      RAFT_CUDA_TRY(cudaMallocHost(&ptr, allocate_size));
+    } else if (malloc_mode == detail::host_malloc_mode_t::cuda_malloc_device) {
+      RAFT_CUDA_TRY(cudaMalloc(&ptr, allocate_size));
+    } else {
+      ptr = static_cast<T*>(
+        mmap(nullptr, allocate_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+      assert(ptr != MAP_FAILED);
+      assert(madvise(ptr, allocate_size, MADV_HUGEPAGE) == 0);
+    }
+    uptr = uptr_t{ptr, detail::free_host_mem{allocate_size, malloc_mode}};
+    std::fflush(stdout);
   }
 
   IndexT extent(const std::uint32_t i)
