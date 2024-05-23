@@ -53,7 +53,7 @@ inline host_malloc_mode_t get_host_alloc_mode()
     } else if (flag == "DEVICE") {
       return host_malloc_mode_t::cuda_malloc_device;
     } else if (flag == "PINNED_HOST") {
-      return host_malloc_mode_t::cuda_malloc_device;
+      return host_malloc_mode_t::cuda_malloc_host;
     } else {
       throw std::runtime_error(
         "CAGRA_GRAPH_HOST_MALLOC_MODE must be HUGE_PAGE_HOST, PINNED_HOST, or DEVICE");
